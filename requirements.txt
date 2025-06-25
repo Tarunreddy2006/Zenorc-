@@ -1,5 +1,3 @@
-imaplib2
-email
 gspread
 paho-mqtt
 oauth2client
