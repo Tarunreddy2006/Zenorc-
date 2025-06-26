@@ -48,7 +48,7 @@ def log_payment(txn: str, amt="5"):
 def send_mqtt(retries=3, delay=5):
     for attempt in range(1, retries + 1):
         try:
-            client = mqtt.Client(protocol=mqtt.MQTTv311)
+            client = mqtt.Client()
             client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
             client.tls_set()
             client.connect(MQTT_BROKER, MQTT_PORT)
