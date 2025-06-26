@@ -3,5 +3,4 @@ gspread
 paho-mqtt
 oauth2client
 gtts
-pygame
 python-dotenv
