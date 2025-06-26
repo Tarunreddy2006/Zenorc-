@@ -49,12 +49,19 @@ def send_mqtt(retries=3, delay=5):
     for attempt in range(1, retries + 1):
         try:
             client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+            client.tls_set()                                 # TLS on 8883
             client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-            client.tls_set()
-            client.connect(MQTT_BROKER, MQTT_PORT)
-            client.publish(MQTT_TOPIC, "paid")
+
+            # Optional debug callbacks
+            client.on_connect = lambda c,u,f,rc: print(f"  ↳ MQTT connect rc={rc}")
+            client.on_publish = lambda c,u,mid: print(f"  ↳ MQTT publish mid={mid}")
+
+            client.connect(MQTT_BROKER, MQTT_PORT, keepalive=20)
+            client.loop_start()
+            result, mid = client.publish(MQTT_TOPIC, "paid", qos=1)
+            print(f"publish result={mqtt.error_string(result)}")
+            client.loop_stop()
             client.disconnect()
-            print("MQTT sent successfully")
             return True
         except Exception as e:
             print(f"MQTT attempt {attempt} failed:", e)
