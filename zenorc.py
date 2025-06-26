@@ -131,11 +131,11 @@ def processor():
 
                 ok = send_mqtt()
                 if ok:
-                    play_tts("Payment of five rupees received")
+                    print("TTS: Payment of five rupees received")
                     status[txn] = "Completed"
                     print(f"Completed: {txn}")
                 else:
-                    play_tts("Payment failed to reach the system.")
+                    print("TTS: Payment failed to reach the system.")
                     status[txn] = "Failed"
 
                 last_processed_time = time.time()
