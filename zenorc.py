@@ -85,11 +85,14 @@ def poll_email() -> str | None:
             msg = email.message_from_bytes(msg_data[0][1])
 
             subj_raw = msg["Subject"] or ""
-            subject  = str(email.header.make_header(email.header.decode_header(subj_raw)))
-            body     = ""
+            subject = str(email.header.make_header(email.header.decode_header(subj_raw)))
+            
+            body = ""
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode(errors="ignore")
+                    payload = part.get_payload(decode=True)
+                    if payload:  # Safe check
+                        body = payload.decode(errors="ignore")
                     break
 
             if any(s in subject for s in SEARCH_STRINGS) or any(s in body for s in SEARCH_STRINGS):
@@ -102,7 +105,6 @@ def poll_email() -> str | None:
     except Exception as e:
         print("Gmail Error:", e)
         return None
-
 # ---------- Processor Thread ----------
 def processor():
     global last_processed_time
