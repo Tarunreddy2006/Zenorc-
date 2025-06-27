@@ -49,11 +49,13 @@ def send_mqtt(retries=3, delay=5):
     for attempt in range(1, retries + 1):
         try:
             client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-            client.tls_set(ca_certs=None)  # uses system default
+            client.tls_set()
             client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
-            def on_connect(client, userdata, flags, rc, properties=None):
-                print(f"  ↳ MQTT connect rc={rc}")
+            # ✅ Use proper function, not lambda, with 5 args
+            def on_connect(client, userdata, flags, reasonCode, properties=None):
+                print(f"  ↳ MQTT connect rc={reasonCode}")
+
             def on_publish(client, userdata, mid):
                 print(f"  ↳ MQTT publish mid={mid}")
 
@@ -72,7 +74,6 @@ def send_mqtt(retries=3, delay=5):
             if attempt < retries:
                 time.sleep(delay)
     return False
-
 # ---------- Gmail Poll ----------
 def poll_email() -> str | None:
     try:
