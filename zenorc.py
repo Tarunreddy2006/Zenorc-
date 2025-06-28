@@ -32,7 +32,7 @@ MQTT_TOPIC          = os.getenv("MQTT_TOPIC", "Zenorc")
 client_id           = f"zenorc-{uuid.uuid4().hex[:8]}"
 
 GSHEET_URL          = os.getenv("GSHEET_URL")
-GSHEET_CREDS_PATH   = os.getenv("SHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
+SHEET_CREDS_PATH   = os.getenv("SHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
 
 SEARCH_STRINGS      = tuple(s.strip() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5").split(","))
 COOLDOWN_SECONDS    = int(os.getenv("COOLDOWN_SECONDS", "40"))
