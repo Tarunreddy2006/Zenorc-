@@ -4,6 +4,7 @@ import email
 import imaplib
 import os
 import re
+import uuid
 import threading
 import time
 from collections import deque
@@ -28,6 +29,7 @@ MQTT_PORT           = int(os.getenv("MQTT_PORT", "8883"))
 MQTT_USERNAME       = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD       = os.getenv("MQTT_PASSWORD")
 MQTT_TOPIC          = os.getenv("MQTT_TOPIC", "Zenorc")
+client_id           = f"zenorc-{uuid.uuid4().hex[:8]}"
 
 GSHEET_URL          = os.getenv("GSHEET_URL")
 GSHEET_CREDS_PATH   = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
@@ -78,7 +80,7 @@ def log_payment(txn_id: str, amount: str = "5") -> None:
     """Append txn→sheet with IST timestamp."""
     try:
         sheet = _get_sheet()
-        now   = datetime.now(ZoneInfo("Asia/Kolkata"))
+        now   = datetime.now(ZoneInfo("Asia/Mumbai"))
         sheet.append_row([
             txn_id,
             amount,
@@ -95,9 +97,8 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5) -> bool:
     """Publish 'paid' once to MQTT_TOPIC. Return True on success."""
     for attempt in range(1, max_retries + 1):
         try:
-            client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-            client.tls_set()  # default certifi CAs
-
+            client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+     
             if MQTT_USERNAME:
                 client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
