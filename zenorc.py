@@ -32,7 +32,7 @@ MQTT_TOPIC          = os.getenv("MQTT_TOPIC", "Zenorc")
 client_id           = f"zenorc-{uuid.uuid4().hex[:8]}"
 
 GSHEET_URL          = os.getenv("GSHEET_URL")
-GSHEET_CREDS_PATH   = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
+GSHEET_CREDS_PATH   = os.getenv("SHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
 
 SEARCH_STRINGS      = tuple(s.strip() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5").split(","))
 COOLDOWN_SECONDS    = int(os.getenv("COOLDOWN_SECONDS", "40"))
@@ -54,14 +54,14 @@ def debug(msg: str) -> None:
 def _get_sheet() -> gspread.Worksheet:
     if not GSHEET_URL:
         raise RuntimeError("GSHEET_URL env var missing")
-    if not os.path.isfile(GSHEET_CREDS_PATH):
-        raise FileNotFoundError(f"Credentials not found: {GSHEET_CREDS_PATH}")
+    if not os.path.isfile(SHEET_CREDS_PATH):
+        raise FileNotFoundError(f"Credentials not found: {SHEET_CREDS_PATH}")
 
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds  = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDS_PATH, scope)
+    creds  = ServiceAccountCredentials.from_json_keyfile_name(SHEET_CREDS_PATH, scope)
     client = gspread.authorize(creds)
     return client.open_by_url(GSHEET_URL).sheet1
 
