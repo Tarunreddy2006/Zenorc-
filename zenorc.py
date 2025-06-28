@@ -28,7 +28,7 @@ MQTT_USERNAME: Optional[str] = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD: Optional[str] = os.getenv("MQTT_PASSWORD")
 MQTT_TOPIC: str = os.getenv("MQTT_TOPIC", "Zenorc")
 
-GSHEET_URL: str | None = os.getenv("GSHEET_URL")
+SHEET_URL: str | None = os.getenv("GSHEET_URL")
 GSHEET_CREDS_PATH: str = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
 
 SEARCH_STRINGS: tuple[str, ...] = tuple(s.strip() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5").split(","))
@@ -49,9 +49,9 @@ def debug(msg: str) -> None:
 # ───────────────────────── GOOGLE SHEETS LOGGER ─────────────────────────
 
 def _get_gsheet() -> gspread.Worksheet:
-    if not GSHEET_URL:
-        raise RuntimeError("GSHEET_URL env not set")
-    if not os.path.isfile(GSHEET_CREDS_PATH):
+    if not SHEET_URL:
+        raise RuntimeError("SHEET_URL env not set")
+    if not os.path.isfile(SHEET_CREDS_PATH):
         raise FileNotFoundError(f"Google creds not found: {GSHEET_CREDS_PATH}")
 
     scope = [
@@ -59,7 +59,7 @@ def _get_gsheet() -> gspread.Worksheet:
         "https://www.googleapis.com/auth/drive",
     ]
     creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDS_PATH, scope)
-    sheet = gspread.authorize(creds).open_by_url(GSHEET_URL).sheet1
+    sheet = gspread.authorize(creds).open_by_url(SHEET_URL).sheet1
     return sheet
 
 def log_payment(txn_id: str, amount: str = "5") -> None:
