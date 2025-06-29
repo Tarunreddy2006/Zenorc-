@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify
 from oauth2client.service_account import ServiceAccountCredentials
 
-# ───────────────────── ENV ─────────────────────
+# ╭─ ENV ──────────────────────────────────────────────────────────╮
 load_dotenv()
 
 EMAIL_ID       = os.getenv("EMAIL_ID")
@@ -29,31 +29,37 @@ GSHEET_CREDS_PATH = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
 
 SEARCH_STRINGS   = tuple(s.strip() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5").split(","))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "40"))
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ─────────────────── STATE ───────────────────
-seen_uids: set[bytes]   = set()    # Gmail UIDs already handled
-seen_txn_ids: set[str]  = set()    # Reference numbers already logged
-queue: deque[str]       = deque()  # Waiting payments
-status: dict[str, str]  = {}       # txn_id → Queued / Processing / Completed / Failed
-last_processed: float   = 0.0      # epoch time of last MQTT send
-imap_lock               = threading.Lock()
+# ╭─ RUNTIME STATE ───────────────────────────────────────────────╮
+seen_uids: set[bytes]  = set()          # Gmail UIDs handled
+seen_txn_ids: set[str] = set()          # Reference numbers already in sheet
+queue: deque[str]      = deque()
+status: dict[str,str]  = {}             # txn_id → state
+last_processed         = 0.0
+imap_lock              = threading.Lock()
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ────────────────── UTILS ──────────────────
-def debug(msg: str) -> None:
-    print(msg, flush=True)
+
+# ╭─ HELPERS ─────────────────────────────────────────────────────╮
+def log(msg: str, level: str = "INFO"):
+    print(f"{level} {msg}", flush=True)
+
 
 def tz_mumbai() -> ZoneInfo:
     try:
         return ZoneInfo("Asia/Mumbai")
     except (ZoneInfoNotFoundError, KeyError):
         return ZoneInfo("UTC")
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ───────────── Google Sheets ─────────────
-def _get_sheet():
+
+# ╭─ GOOGLE‑SHEETS ───────────────────────────────────────────────╮
+def _sheet() -> gspread.Worksheet:
     if not GSHEET_URL:
         raise RuntimeError("GSHEET_URL env var missing")
     if not os.path.isfile(GSHEET_CREDS_PATH):
-        raise FileNotFoundError(f"Credentials not found: {GSHEET_CREDS_PATH}")
+        raise FileNotFoundError(f"Credentials JSON not found: {GSHEET_CREDS_PATH}")
 
     scope  = ["https://spreadsheets.google.com/feeds",
               "https://www.googleapis.com/auth/drive"]
@@ -61,44 +67,48 @@ def _get_sheet():
     client = gspread.authorize(creds)
     return client.open_by_url(GSHEET_URL).sheet1
 
+
 def _bootstrap_txns() -> set[str]:
     try:
-        return set(_get_sheet().col_values(1))
+        return set(_sheet().col_values(1))
     except Exception as exc:
-        debug(f"Sheets bootstrap warning: {exc}")
+        log(f"Sheets bootstrap warning: {exc}", "WARN")
         return set()
+
 
 seen_txn_ids = _bootstrap_txns()
 
+
 def log_payment(txn_id: str, amount: str = "5") -> None:
     try:
-        sheet = _get_sheet()
+        sheet = _sheet()
         now   = datetime.now(tz_mumbai())
         sheet.append_row([txn_id, amount,
                           now.strftime("%Y-%m-%d"),
                           now.strftime("%H:%M:%S")])
         seen_txn_ids.add(txn_id)
-        debug(f"Logged {txn_id} to Google Sheets")
+        log(f"Logged {txn_id} to Google Sheets")
     except Exception as exc:
-        debug(f"Sheets Error: {exc}")
+        log(f"Sheets Error: {exc}", "ERROR")
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ───────────── MQTT PUBLISH ─────────────
+
+# ╭─ MQTT ────────────────────────────────────────────────────────╮
 def send_mqtt(max_retries: int = 3, retry_delay: int = 5) -> bool:
     for attempt in range(1, max_retries + 1):
         try:
             connected = threading.Event()
-
-            client = mqtt.Client(client_id=CLIENT_ID,
-                                 protocol=mqtt.MQTTv311,
-                                 callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-
+            client = mqtt.Client(
+                client_id=CLIENT_ID,
+                protocol=mqtt.MQTTv311,
+                callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            )
             if MQTT_USERNAME:
                 client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
-            def on_connect(c, _u, _f, rc, _p=None):
-                debug(f"   ↳ MQTT connect rc={rc}")
-                if rc == 0:
-                    connected.set()
+            def on_connect(c, *_):
+                connected.set()
+                log("↳ MQTT connected rc=Success")
 
             client.on_connect = on_connect
             client.tls_set()
@@ -108,29 +118,40 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5) -> bool:
             if not connected.wait(timeout=5):
                 raise TimeoutError("MQTT connect timeout")
 
-            res, mid = client.publish(MQTT_TOPIC, "paid", qos=1)
-            debug(f"   ↳ MQTT publish result = {mqtt.error_string(res)} (mid={mid})")
+            rc, mid = client.publish(MQTT_TOPIC, "paid", qos=1)
+            level = "INFO" if rc == mqtt.MQTT_ERR_SUCCESS else "ERROR"
+            log(f"↳ MQTT publish result = {mqtt.error_string(rc)} (mid={mid})", level)
 
             client.loop_stop(); client.disconnect()
-            return res == mqtt.MQTT_ERR_SUCCESS
+            return rc == mqtt.MQTT_ERR_SUCCESS
 
         except Exception as exc:
-            debug(f"MQTT attempt {attempt}/{max_retries} failed: {exc}")
+            log(f"MQTT attempt {attempt}/{max_retries} failed: {exc}", "WARN")
             if attempt < max_retries:
                 time.sleep(retry_delay)
     return False
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ───────────── Gmail Polling ─────────────
+
+# ╭─ GMAIL POLLING ───────────────────────────────────────────────╮
 def _imap_login() -> imaplib.IMAP4_SSL:
     if not (EMAIL_ID and EMAIL_PASSWORD):
-        raise RuntimeError("EMAIL_ID and/or EMAIL_PASSWORD missing")
+        raise RuntimeError("EMAIL_ID / EMAIL_PASSWORD missing")
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
     imap.login(EMAIL_ID, EMAIL_PASSWORD)
     return imap
 
+
 def _extract_txn_id(body: str) -> str:
     m = re.search(r"Reference\s*No\.?[:\s]*(\d+)", body)
     return m.group(1) if m else f"TXN{int(time.time())}"
+
+
+def _looks_like_credit(body: str) -> bool:
+    """Return True only for credit notifications; false for debit."""
+    body_l = body.lower()
+    return "credited" in body_l and "debited" not in body_l
+
 
 def poll_email() -> Optional[str]:
     with imap_lock:
@@ -141,6 +162,7 @@ def poll_email() -> Optional[str]:
                 for uid in (data[0] or b"").split()[-30:][::-1]:
                     if uid in seen_uids:
                         continue
+
                     _, msg_data = mail.fetch(uid, "(RFC822)")
                     msg = email.message_from_bytes(msg_data[0][1])
 
@@ -152,62 +174,71 @@ def poll_email() -> Optional[str]:
                             body = (part.get_payload(decode=True) or b"").decode(errors="ignore")
                             break
 
-                    if any(s in subject for s in SEARCH_STRINGS) or any(s in body for s in SEARCH_STRINGS):
+                    if _looks_like_credit(body) and (
+                        any(s in subject for s in SEARCH_STRINGS) or
+                        any(s in body    for s in SEARCH_STRINGS)
+                    ):
                         txn_id = _extract_txn_id(body)
                         seen_uids.add(uid)
-                        mail.store(uid, "+FLAGS", "\\Seen")
-                        debug(f"UID {uid.decode()} → {txn_id}")
+                        mail.store(uid, "+FLAGS", "\\Seen")  # mark read
+                        log(f"UID {uid.decode()} → {txn_id}")
                         return txn_id
         except Exception as exc:
-            debug(f"Gmail Error: {exc}")
+            log(f"Gmail Error: {exc}", "ERROR")
     return None
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ───────────── Payment Processor ─────────────
-def processor():
+
+# ╭─ PAYMENT PROCESSOR THREAD ────────────────────────────────────╮
+def processor() -> None:
     global last_processed
     while True:
         if queue:
             now = time.time()
             if now - last_processed >= COOLDOWN_SECONDS:
-                txn_id = queue.popleft()
-                status[txn_id] = "Processing"
-                debug(f"⚙ Processing {txn_id}")
+                txn = queue.popleft()
+                status[txn] = "Processing"
+                log(f"⚙ Processing {txn}")
 
                 ok = send_mqtt()
-                status[txn_id] = "Completed" if ok else "Failed"
-                debug(("✔" if ok else "❌") + f" Completed {txn_id}")
+                status[txn] = "Completed" if ok else "Failed"
+                log(("✔" if ok else "❌") + f" Completed {txn}")
                 last_processed = time.time()
             else:
-                debug(f"Cool‑down {int(COOLDOWN_SECONDS - (time.time() - last_processed))} s")
+                log(f"Cool‑down {int(COOLDOWN_SECONDS - (time.time() - last_processed))} s")
         time.sleep(1)
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ───────────── Flask App ─────────────
+
+# ╭─ FLASK SERVICE ───────────────────────────────────────────────╮
 app = Flask(__name__)
 
 @app.route("/")
 def root():
-    return (
-        "<h3>Zenorc Payment Processor</h3>"
-        f"<p>Status: running</p>"
-        f"<p>Queue length: {len(queue)}</p>"
-    )
+    return ( "<h3>Zenorc Payment Processor</h3>"
+             f"<p>Status: running</p>"
+             f"<p>Queue length: {len(queue)}</p>" )
 
 @app.route("/health")
 def health():
     return jsonify(ok=True)
+# ╰────────────────────────────────────────────────────────────────╯
 
-# ───────────── Main Loop ─────────────
-def main_loop():
-    debug("Scanning inbox for payments…")  # printed once at start
+
+# ╭─ MAIN LOOP ───────────────────────────────────────────────────╮
+def main_loop() -> None:
+    log("Scanning inbox for payments…")
     while True:
-        txn_id = poll_email()
-        if txn_id and txn_id not in status and txn_id not in seen_txn_ids:
-            status[txn_id] = "Queued"
-            log_payment(txn_id)
-            queue.append(txn_id)
-            debug(f"Queued {txn_id}")
-            debug("Scanning inbox for payments…")  # re‑print after each new payment
-        time.sleep(3)
+        txn = poll_email()
+        if txn and txn not in status and txn not in seen_txn_ids:
+            status[txn] = "Queued"
+            log_payment(txn)
+            queue.append(txn)
+            log(f"Queued {txn}")
+            log("Scanning inbox for payments…")  # re‑print only after a find
+        time.sleep(1)
+# ╰────────────────────────────────────────────────────────────────╯
+
 
 if __name__ == "__main__":
     threading.Thread(target=processor,  daemon=True).start()
