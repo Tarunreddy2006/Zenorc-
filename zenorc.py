@@ -122,58 +122,76 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5):
 # ╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ EMAIL HANDLER ───────────────────────────────────────────────╮
-def _imap_login():
-    if not EMAIL_ID or not EMAIL_PASSWORD:
+def _imap_login() -> imaplib.IMAP4_SSL:
+    if not (EMAIL_ID and EMAIL_PASSWORD):
         raise RuntimeError("EMAIL_ID / EMAIL_PASSWORD missing")
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
     imap.login(EMAIL_ID, EMAIL_PASSWORD)
     return imap
 
-def _extract_txn_id(body: str):
-    m = re.search(r"Reference\s*(?:No\.?|number)?[:\s]*(\d{8,})", body, re.I)
+
+def _extract_txn_id(body: str) -> str:
+    """
+    Works with both formats:
+      •  Reference No.: 845009839012
+      •  UPI transaction reference number is 845009839012
+    """
+    m = re.search(
+        r"(?:Reference\s*(?:No\.?|number)?|UPI\s*transaction\s*reference\s*number)"
+        r"\s*[:\s]*(\d{8,})",
+        body,
+        re.I,
+    )
     return m.group(1) if m else f"TXN{int(time.time())}"
 
-def _looks_like_credit(body: str):
+
+def _looks_like_credit(body: str) -> bool:
+    """True = credit notification, False = ignore (e.g. debit)."""
     body_l = body.lower()
     return (
-        "credited" in body_l and
-        "debited" not in body_l and
-        ("successfully credited" in body_l or "has been credited" in body_l)
+        "credited" in body_l
+        and "debited" not in body_l
+        and (
+            "successfully credited" in body_l
+            or "has been credited" in body_l
+        )
     )
 
+
+# ───────────── POLL INBOX ─────────────
 def poll_email() -> Optional[str]:
+    """Return a new txn‑id if found, else None."""
     with imap_lock:
         try:
             with _imap_login() as mail:
                 mail.select("inbox")
                 _, data = mail.search(None, "(UNSEEN)")
-                for uid in (data[0] or b"").split()[-30:][::-1]:
+                for uid in (data[0] or b"").split()[-30:][::-1]:   # newest 30
                     if uid in seen_uids:
                         continue
 
                     _, msg_data = mail.fetch(uid, "(RFC822)")
-                    msg = email.message_from_bytes(msg_data[0][1])
-                    subject = str(email.header.make_header(email.header.decode_header(msg.get("Subject", ""))))
+                    msg  = email.message_from_bytes(msg_data[0][1])
 
+                    # --- plain‑text body ---
                     body = ""
                     for part in msg.walk():
                         if part.get_content_type() == "text/plain":
-                            body = (part.get_payload(decode=True) or b"").decode(errors="ignore")
+                            body = (part.get_payload(decode=True) or b"").decode(
+                                errors="ignore"
+                            )
                             break
 
-                    if _looks_like_credit(body) and (
-                        any(s in subject.lower() for s in SEARCH_STRINGS) or
-                        any(s in body.lower() for s in SEARCH_STRINGS)
-                    ):
+                    if _looks_like_credit(body):
                         txn_id = _extract_txn_id(body)
                         seen_uids.add(uid)
-                        mail.store(uid, "+FLAGS", "\\Seen")
+                        mail.store(uid, "+FLAGS", "\\Seen")  # mark read
                         log(f"UID {uid.decode()} → {txn_id}")
                         return txn_id
         except Exception as e:
             log(f"Gmail Error: {e}", "ERROR")
     return None
-# ╰────────────────────────────────────────────────────────────────╯
+#╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ PROCESSOR ───────────────────────────────────────────────────╮
 def processor():
@@ -191,7 +209,7 @@ def processor():
                 last_processed = time.time()
             else:
                 remain = int(COOLDOWN_SECONDS - (time.time() - last_processed))
-                log(f"⏳ Cooldown: {remain}s")
+                log(f"Cooldown: {remain}s")
         time.sleep(1)
 # ╰────────────────────────────────────────────────────────────────╯
 
