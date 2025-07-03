@@ -78,7 +78,7 @@ def log_payment(txn_id: str, amount: str = "5"):
         now = datetime.now(tz_mumbai())
         sheet.append_row([txn_id, amount, now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")])
         seen_txn_ids.add(txn_id)
-        log(f"✔ Logged {txn_id} to Google Sheets")
+        log(f"Logged {txn_id} to Google Sheets")
     except Exception as e:
         log(f"Sheets Error: {e}", "ERROR")
 # ╰────────────────────────────────────────────────────────────────╯
@@ -136,9 +136,9 @@ def _extract_txn_id(body: str):
 def _looks_like_credit(body: str):
     body_l = body.lower()
     return (
-        "credited" in body_l
-        and "debited" not in body_l
-        and "successfully credited" in body_l or "has been credited" in body_l
+        "credited" in body_l and
+        "debited" not in body_l and
+        ("successfully credited" in body_l or "has been credited" in body_l)
     )
 
 def poll_email() -> Optional[str]:
@@ -161,7 +161,10 @@ def poll_email() -> Optional[str]:
                             body = (part.get_payload(decode=True) or b"").decode(errors="ignore")
                             break
 
-                    if _looks_like_credit(body) and any(s in subject.lower() or s in body.lower() for s in SEARCH_STRINGS):
+                    if _looks_like_credit(body) and (
+                        any(s in subject.lower() for s in SEARCH_STRINGS) or
+                        any(s in body.lower() for s in SEARCH_STRINGS)
+                    ):
                         txn_id = _extract_txn_id(body)
                         seen_uids.add(uid)
                         mail.store(uid, "+FLAGS", "\\Seen")
@@ -188,7 +191,7 @@ def processor():
                 last_processed = time.time()
             else:
                 remain = int(COOLDOWN_SECONDS - (time.time() - last_processed))
-                log(f"Cooldown: {remain}s")
+                log(f"⏳ Cooldown: {remain}s")
         time.sleep(1)
 # ╰────────────────────────────────────────────────────────────────╯
 
@@ -218,7 +221,7 @@ def main_loop():
             queue.append(txn_id)
             log(f"Queued {txn_id}")
             log("Scanning inbox for payments…")
-        time.sleep(1)
+        time.sleep(3)
 # ╰────────────────────────────────────────────────────────────────╯
 
 if __name__ == "__main__":
