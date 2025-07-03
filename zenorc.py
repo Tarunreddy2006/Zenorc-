@@ -132,21 +132,25 @@ def _imap_login() -> imaplib.IMAP4_SSL:
 
 def _extract_txn_id(body: str) -> str:
     """
-    Works with both formats:
-      •  Reference No.: 845009839012
-      •  UPI transaction reference number is 845009839012
+    Extracts transaction ID from both formats:
+    1. Reference No.: 845009839012
+    2. UPI transaction reference number is 845009839012
     """
-    m = re.search(
-        r"(?:Reference\s*(?:No\.?|number)?|UPI\s*transaction\s*reference\s*number)"
-        r"\s*[:\s]*(\d{8,})",
-        body,
-        re.I,
-    )
-    return m.group(1) if m else f"TXN{int(time.time())}"
+    patterns = [
+        r"Reference\s*(?:No\.?|number)?\s*[:\-]?\s*(\d{8,})",  # Format 1
+        r"transaction reference number\s*(?:is)?\s*[:\-]?\s*(\d{8,})",  # Format 2
+    ]
+    for pat in patterns:
+        m = re.search(pat, body, re.I)
+        if m:
+            return m.group(1)
+    return f"TXN{int(time.time())}"
 
 
 def _looks_like_credit(body: str) -> bool:
-    """True = credit notification, False = ignore (e.g. debit)."""
+    """
+    Returns True only for valid credit messages (avoiding debits).
+    """
     body_l = body.lower()
     return (
         "credited" in body_l
@@ -158,36 +162,37 @@ def _looks_like_credit(body: str) -> bool:
     )
 
 
-# ───────────── POLL INBOX ─────────────
 def poll_email() -> Optional[str]:
-    """Return a new txn‑id if found, else None."""
+    """
+    Poll Gmail inbox for unseen ₹5 credit emails. Returns txn_id if new valid payment found.
+    """
     with imap_lock:
         try:
             with _imap_login() as mail:
                 mail.select("inbox")
                 _, data = mail.search(None, "(UNSEEN)")
-                for uid in (data[0] or b"").split()[-30:][::-1]:   # newest 30
+                for uid in (data[0] or b"").split()[-30:][::-1]:
                     if uid in seen_uids:
                         continue
 
                     _, msg_data = mail.fetch(uid, "(RFC822)")
-                    msg  = email.message_from_bytes(msg_data[0][1])
+                    msg = email.message_from_bytes(msg_data[0][1])
 
-                    # --- plain‑text body ---
+                    # Extract plain text body
                     body = ""
                     for part in msg.walk():
                         if part.get_content_type() == "text/plain":
-                            body = (part.get_payload(decode=True) or b"").decode(
-                                errors="ignore"
-                            )
+                            body = (part.get_payload(decode=True) or b"").decode(errors="ignore")
                             break
 
+                    # Check if it's a valid credit message
                     if _looks_like_credit(body):
                         txn_id = _extract_txn_id(body)
                         seen_uids.add(uid)
-                        mail.store(uid, "+FLAGS", "\\Seen")  # mark read
+                        mail.store(uid, "+FLAGS", "\\Seen")
                         log(f"UID {uid.decode()} → {txn_id}")
                         return txn_id
+
         except Exception as e:
             log(f"Gmail Error: {e}", "ERROR")
     return None
