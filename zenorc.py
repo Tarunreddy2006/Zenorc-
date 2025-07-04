@@ -122,85 +122,99 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5):
 # ╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ EMAIL HANDLER ───────────────────────────────────────────────╮
+# ────────── IMAP helper ──────────
 def _imap_login() -> imaplib.IMAP4_SSL:
-    """
-    Logs into Gmail via IMAP using SSL and returns the connection.
-    """
     if not EMAIL_ID or not EMAIL_PASSWORD:
-        raise RuntimeError("EMAIL_ID / EMAIL_PASSWORD missing")
+        raise RuntimeError("EMAIL_ID or EMAIL_PASSWORD missing")
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
     imap.login(EMAIL_ID, EMAIL_PASSWORD)
     return imap
 
 
+# ─────── reference‑number scraper ───────
 def _extract_txn_id(body: str) -> str:
     """
-    Extracts transaction ID from supported formats:
-      1. Reference No.: 845009839012
-      2. UPI transaction reference number is 845009839012
+    Works with:
+      • Reference No.: 845009839012
+      • ...reference number is 845009839012
     """
-    patterns = [
+    for pat in (
         r"Reference\s*(?:No\.?|number)?\s*[:\-]?\s*(\d{8,})",
-        r"transaction reference number\s*(?:is)?\s*[:\-]?\s*(\d{8,})"
-    ]
-    for pat in patterns:
+        r"transaction reference number\s*(?:is)?\s*[:\-]?\s*(\d{8,})",
+    ):
         m = re.search(pat, body, re.I)
         if m:
             return m.group(1)
-    return f"TXN{int(time.time())}"
+    return f"TXN{int(time.time())}"      # fallback – should be rare
 
 
-def _looks_like_credit(body: str) -> bool:
+# ─────── credit / amount filters ───────
+_AMT_5_RE = re.compile(
+    r"(?:₹|rs\.?|inr)\s*[, ]*\s*5(?:[.,]00)?\b",
+    re.I,
+)
+
+def _looks_like_credit(body_lc: str) -> bool:
     """
-    Validates if the email is a genuine ₹5 credit notification.
+    Only true for INCOMING ₹5 credits.
     """
-    body_l = body.lower()
+    if (
+        "credited" not in body_lc
+        or "debited" in body_lc
+    ):
+        return False
 
-    has_credit_keywords = (
-        "credited" in body_l and
-        "debited" not in body_l and (
-            "successfully credited" in body_l or
-            "has been credited" in body_l
-        )
+    wanted_phrase = (
+        "successfully credited" in body_lc
+        or "has been credited" in body_lc
+        or "credited to your account" in body_lc
     )
-
-    # Ensure it's exactly ₹5.00 (not ₹50, ₹500 etc.)
-    is_five_rupees = re.search(r"(₹|rs\.?|inr)\s*5(?:[.,]00)?\b", body_l)
-
-    return has_credit_keywords and bool(is_five_rupees)
+    return wanted_phrase and bool(_AMT_5_RE.search(body_lc))
 
 
+# ─────── poll inbox ───────
 def poll_email() -> Optional[str]:
     """
-    Poll Gmail inbox for unseen ₹5 credit notifications.
-    Returns txn_id if a valid, new transaction is found.
+    Returns new txn‑id (str) or None.
     """
     with imap_lock:
         try:
             with _imap_login() as mail:
                 mail.select("inbox")
                 _, data = mail.search(None, "(UNSEEN)")
-
                 for uid in (data[0] or b"").split()[-30:][::-1]:
                     if uid in seen_uids:
                         continue
 
                     _, msg_data = mail.fetch(uid, "(RFC822)")
-                    msg = email.message_from_bytes(msg_data[0][1])
+                    msg   = email.message_from_bytes(msg_data[0][1])
 
-                    # Extract plain text email body
+                    # plain‑text part
                     body = ""
                     for part in msg.walk():
                         if part.get_content_type() == "text/plain":
-                            body = (part.get_payload(decode=True) or b"").decode(errors="ignore")
+                            body = (part.get_payload(decode=True) or b"").decode(
+                                errors="ignore"
+                            )
                             break
 
-                    if _looks_like_credit(body):
-                        txn_id = _extract_txn_id(body)
-                        seen_uids.add(uid)
-                        mail.store(uid, "+FLAGS", "\\Seen")  # mark as read
-                        log(f"UID {uid.decode()} → {txn_id}")
-                        return txn_id
+                    body_lc = body.lower()
+
+                    # ---------- filters ----------
+                    if not _looks_like_credit(body_lc):
+                        log("skip – not a ₹5 credit")
+                        continue
+
+                    txn_id = _extract_txn_id(body)
+                    if txn_id in seen_txn_ids:
+                        log("skip – already logged")
+                        continue
+
+                    # ---------- success ----------
+                    seen_uids.add(uid)
+                    mail.store(uid, "+FLAGS", "\\Seen")  # mark read
+                    log(f"UID {uid.decode()} → {txn_id}")
+                    return txn_id
 
         except Exception as e:
             log(f"Gmail Error: {e}", "ERROR")
