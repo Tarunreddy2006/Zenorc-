@@ -1,6 +1,6 @@
 flask
 gspread
-paho-mqtt
+paho-mqtt>=2.0
 oauth2client
 python-dotenv
 

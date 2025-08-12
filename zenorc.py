@@ -24,8 +24,14 @@ MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
 MQTT_TOPIC    = os.getenv("MQTT_TOPIC", "Zenorc")
 CLIENT_ID     = f"zenorc-{uuid.uuid4().hex[:8]}"
 
-GSHEET_URL        = os.getenv("GSHEET_URL")
-GSHEET_CREDS_PATH = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
+# Backward-compatible env var names for Google Sheets
+GSHEET_URL_ENV = os.getenv("GSHEET_URL") or os.getenv("SHEET_URL")
+GSHEET_CREDS_PATH_ENV = (
+    os.getenv("GSHEET_CREDS_PATH") or os.getenv("GOOGLE_CREDS") or "/etc/secrets/Zenorc.json"
+)
+
+GSHEET_URL        = GSHEET_URL_ENV
+GSHEET_CREDS_PATH = GSHEET_CREDS_PATH_ENV
 
 SEARCH_STRINGS = tuple(s.strip().lower() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5,INR 5").split(","))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "40"))
@@ -44,10 +50,11 @@ imap_lock              = threading.Lock()
 def log(msg: str, level: str = "INFO"):
     print(f"{level} {msg}", flush=True)
 
+
 def tz_mumbai():
     try:
         return ZoneInfo("Asia/Mumbai")
-    except:
+    except ZoneInfoNotFoundError:
         return ZoneInfo("UTC")
 # ╰────────────────────────────────────────────────────────────────╯
 
@@ -63,6 +70,7 @@ def _sheet() -> gspread.Worksheet:
     client = gspread.authorize(creds)
     return client.open_by_url(GSHEET_URL).sheet1
 
+
 def _bootstrap_txns():
     try:
         return set(_sheet().col_values(1))
@@ -70,7 +78,9 @@ def _bootstrap_txns():
         log(f"Sheets bootstrap failed: {e}", "WARN")
         return set()
 
+
 seen_txn_ids = _bootstrap_txns()
+
 
 def log_payment(txn_id: str, amount: str = "5"):
     try:
@@ -84,6 +94,7 @@ def log_payment(txn_id: str, amount: str = "5"):
 # ╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ MQTT ────────────────────────────────────────────────────────╮
+
 def send_mqtt(max_retries: int = 3, retry_delay: int = 5):
     for attempt in range(1, max_retries + 1):
         try:
@@ -122,7 +133,8 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5):
 # ╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ EMAIL HANDLER ───────────────────────────────────────────────╮
-# ────────── IMAP helper ──────────
+# ────────── IMAP helper ──────────
+
 def _imap_login() -> imaplib.IMAP4_SSL:
     if not EMAIL_ID or not EMAIL_PASSWORD:
         raise RuntimeError("EMAIL_ID or EMAIL_PASSWORD missing")
@@ -132,6 +144,7 @@ def _imap_login() -> imaplib.IMAP4_SSL:
 
 
 # ─────── reference‑number scraper ───────
+
 def _extract_txn_id(body: str) -> str:
     """
     Works with:
@@ -145,14 +158,16 @@ def _extract_txn_id(body: str) -> str:
         m = re.search(pat, body, re.I)
         if m:
             return m.group(1)
-    return f"TXN{int(time.time())}"      # fallback – should be rare
+    return f"TXN{int(time.time())}"      # fallback – should be rare
 
 
 # ─────── credit / amount filters ───────
+
 _AMT_5_RE = re.compile(
     r"(?:₹|rs\.?|inr)\s*[, ]*\s*5(?:[.,]00)?\b",
     re.I,
 )
+
 
 def _looks_like_credit(body_lc: str) -> bool:
     """
@@ -172,7 +187,8 @@ def _looks_like_credit(body_lc: str) -> bool:
     return wanted_phrase and bool(_AMT_5_RE.search(body_lc))
 
 
-# ─────── poll inbox ───────
+# ─────── poll inbox ───────
+
 def poll_email() -> Optional[str]:
     """
     Returns new txn‑id (str) or None.
@@ -188,6 +204,9 @@ def poll_email() -> Optional[str]:
 
                     _, msg_data = mail.fetch(uid, "(RFC822)")
                     msg   = email.message_from_bytes(msg_data[0][1])
+
+                    # Cache UID to avoid reprocessing non-matching mails within this runtime
+                    seen_uids.add(uid)
 
                     # plain‑text part
                     body = ""
@@ -211,7 +230,6 @@ def poll_email() -> Optional[str]:
                         continue
 
                     # ---------- success ----------
-                    seen_uids.add(uid)
                     mail.store(uid, "+FLAGS", "\\Seen")  # mark read
                     log(f"UID {uid.decode()} → {txn_id}")
                     return txn_id
@@ -223,6 +241,7 @@ def poll_email() -> Optional[str]:
 #╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ PROCESSOR ───────────────────────────────────────────────────╮
+
 def processor():
     global last_processed
     while True:
@@ -245,6 +264,7 @@ def processor():
 # ╭─ FLASK ───────────────────────────────────────────────────────╮
 app = Flask(__name__)
 
+
 @app.route("/")
 def root():
     return (
@@ -252,12 +272,15 @@ def root():
         f"<p>Status: running</p><p>Queue length: {len(queue)}</p>"
     )
 
+
 @app.route("/health")
+
 def health():
     return jsonify(ok=True)
 # ╰────────────────────────────────────────────────────────────────╯
 
 # ╭─ MAIN LOOP ───────────────────────────────────────────────────╮
+
 def main_loop():
     log("Scanning inbox for payments…")
     while True:

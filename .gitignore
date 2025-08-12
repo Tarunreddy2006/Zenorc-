@@ -1,0 +1,25 @@
+# Environment files
+.env
+Zenorc.env
+.env.local
+
+# Credentials
+*.json
+!package*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
