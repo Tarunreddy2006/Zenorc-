@@ -9,11 +9,13 @@ app = Flask(__name__)
 def home():
     return "Zenorc system is live!"
 
-# Start the Zenorc processing thread
-def start_bot():
-    zenorc.start()  # You need to put your Zenorc main loop inside a start() function
+# Start the Zenorc processing threads
 
-if __name__ == "_main_":
-    threading.Thread(target=start_bot, daemon=True).start()
-    port = int(os.getenv("PORT", 10000))
+def start_bot():
+    threading.Thread(target=zenorc.processor, daemon=True).start()
+    threading.Thread(target=zenorc.main_loop, daemon=True).start()
+
+if __name__ == "__main__":
+    start_bot()
+    port = int(os.getenv("PORT", "10000"))
     app.run(host='0.0.0.0', port=port)  # ✅ Correct version
