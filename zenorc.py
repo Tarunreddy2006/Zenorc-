@@ -13,6 +13,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # ╭─ ENV ──────────────────────────────────────────────────────────╮
 load_dotenv()
+load_dotenv(override=False)
+load_dotenv("Zenorc.env", override=False)
 
 EMAIL_ID       = os.getenv("EMAIL_ID")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -26,6 +28,13 @@ CLIENT_ID     = f"zenorc-{uuid.uuid4().hex[:8]}"
 
 GSHEET_URL        = os.getenv("GSHEET_URL")
 GSHEET_CREDS_PATH = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
+
+# Fallbacks for alternate env var names
+if not GSHEET_URL:
+	GSHEET_URL = os.getenv("SHEET_URL")
+alt_creds = os.getenv("GOOGLE_CREDS")
+if alt_creds and (not GSHEET_CREDS_PATH or GSHEET_CREDS_PATH == "/etc/secrets/Zenorc.json"):
+	GSHEET_CREDS_PATH = alt_creds
 
 SEARCH_STRINGS = tuple(s.strip().lower() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5,INR 5").split(","))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "40"))
@@ -88,11 +97,18 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5):
     for attempt in range(1, max_retries + 1):
         try:
             connected = threading.Event()
-            client = mqtt.Client(
-                client_id=CLIENT_ID,
-                protocol=mqtt.MQTTv311,
-                callback_api_version=mqtt.CallbackAPIVersion.VERSION2
-            )
+            # Create MQTT client compatible with paho-mqtt v1 and v2
+            client_kwargs = {"client_id": CLIENT_ID, "protocol": mqtt.MQTTv311}
+            callback_api = getattr(mqtt, "CallbackAPIVersion", None)
+            if callback_api is not None:
+                version2 = getattr(callback_api, "VERSION2", None)
+                if version2 is not None:
+                    client_kwargs["callback_api_version"] = version2
+            try:
+                client = mqtt.Client(**client_kwargs)
+            except TypeError:
+                # Older paho-mqtt versions do not support callback_api_version
+                client = mqtt.Client(client_id=CLIENT_ID, protocol=mqtt.MQTTv311)
             if MQTT_USERNAME:
                 client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
@@ -271,9 +287,21 @@ def main_loop():
         time.sleep(3)
 # ╰────────────────────────────────────────────────────────────────╯
 
-if __name__ == "__main__":
-    threading.Thread(target=processor, daemon=True).start()
-    threading.Thread(target=main_loop, daemon=True).start()
+# Idempotent starter for background threads
+_started = False
+_start_lock = threading.Lock()
 
+def start():
+    global _started
+    with _start_lock:
+        if _started:
+            return
+        threading.Thread(target=processor, daemon=True).start()
+        threading.Thread(target=main_loop, daemon=True).start()
+        _started = True
+# ╰────────────────────────────────────────────────────────────────╯
+
+if __name__ == "__main__":
+    start()
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False)
