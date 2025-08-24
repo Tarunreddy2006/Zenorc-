@@ -31,10 +31,10 @@ GSHEET_CREDS_PATH = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
 
 # Fallbacks for alternate env var names
 if not GSHEET_URL:
-	GSHEET_URL = os.getenv("SHEET_URL")
+    GSHEET_URL = os.getenv("SHEET_URL")
 alt_creds = os.getenv("GOOGLE_CREDS")
 if alt_creds and (not GSHEET_CREDS_PATH or GSHEET_CREDS_PATH == "/etc/secrets/Zenorc.json"):
-	GSHEET_CREDS_PATH = alt_creds
+    GSHEET_CREDS_PATH = alt_creds
 
 SEARCH_STRINGS = tuple(s.strip().lower() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5,INR 5").split(","))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "40"))

@@ -14,6 +14,6 @@ def start_bot():
     zenorc.start()  # You need to put your Zenorc main loop inside a start() function
 
 if __name__ == "__main__":
-	threading.Thread(target=start_bot, daemon=True).start()
-	port = int(os.getenv("PORT", 10000))
-	app.run(host='0.0.0.0', port=port)
+    threading.Thread(target=start_bot, daemon=True).start()
+    port = int(os.getenv("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
