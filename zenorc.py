@@ -24,8 +24,8 @@ MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
 MQTT_TOPIC    = os.getenv("MQTT_TOPIC", "Zenorc")
 CLIENT_ID     = f"zenorc-{uuid.uuid4().hex[:8]}"
 
-GSHEET_URL        = os.getenv("GSHEET_URL")
-GSHEET_CREDS_PATH = os.getenv("GSHEET_CREDS_PATH", "/etc/secrets/Zenorc.json")
+GSHEET_URL        = os.getenv("GSHEET_URL") or os.getenv("SHEET_URL")
+GSHEET_CREDS_PATH = os.getenv("GSHEET_CREDS_PATH") or os.getenv("GOOGLE_CREDS") or "/etc/secrets/Zenorc.json"
 
 SEARCH_STRINGS = tuple(s.strip().lower() for s in os.getenv("SEARCH_STRINGS", "₹5,Rs 5,INR 5").split(","))
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "40"))
@@ -47,7 +47,7 @@ def log(msg: str, level: str = "INFO"):
 def tz_mumbai():
     try:
         return ZoneInfo("Asia/Mumbai")
-    except:
+    except ZoneInfoNotFoundError:
         return ZoneInfo("UTC")
 # ╰────────────────────────────────────────────────────────────────╯
 
@@ -88,11 +88,18 @@ def send_mqtt(max_retries: int = 3, retry_delay: int = 5):
     for attempt in range(1, max_retries + 1):
         try:
             connected = threading.Event()
-            client = mqtt.Client(
-                client_id=CLIENT_ID,
-                protocol=mqtt.MQTTv311,
-                callback_api_version=mqtt.CallbackAPIVersion.VERSION2
-            )
+            try:
+                client = mqtt.Client(
+                    client_id=CLIENT_ID,
+                    protocol=mqtt.MQTTv311,
+                    callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+                )
+            except Exception:
+                # Fallback for paho-mqtt v1.x that lacks callback_api_version
+                client = mqtt.Client(
+                    client_id=CLIENT_ID,
+                    protocol=mqtt.MQTTv311,
+                )
             if MQTT_USERNAME:
                 client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
@@ -179,8 +186,9 @@ def poll_email() -> Optional[str]:
     """
     with imap_lock:
         try:
-            with _imap_login() as mail:
-                mail.select("inbox")
+            mail = _imap_login()
+            try:
+                mail.select("INBOX")
                 _, data = mail.search(None, "(UNSEEN)")
                 for uid in (data[0] or b"").split()[-30:][::-1]:
                     if uid in seen_uids:
@@ -215,6 +223,11 @@ def poll_email() -> Optional[str]:
                     mail.store(uid, "+FLAGS", "\\Seen")  # mark read
                     log(f"UID {uid.decode()} → {txn_id}")
                     return txn_id
+            finally:
+                try:
+                    mail.logout()
+                except Exception:
+                    pass
 
         except Exception as e:
             log(f"Gmail Error: {e}", "ERROR")
